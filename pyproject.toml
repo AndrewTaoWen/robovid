@@ -1,0 +1,23 @@
+[project]
+name = "robovid"
+version = "0.1.0"
+description = "Turn internet video into labeled training data for robot learning"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python-headless>=4.8",
+    "pydantic>=2",
+    "numpy",
+    "anthropic>=0.40",
+    "yt-dlp",
+]
+
+[project.scripts]
+robovid = "robovid.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

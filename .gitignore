@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+data/
+*.mp4
+annotations*.jsonl
+.env

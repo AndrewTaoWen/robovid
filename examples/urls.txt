@@ -1,0 +1,2 @@
+# One video URL per line. Only Creative Commons / public domain videos are downloaded by default.
+# Tip: on YouTube, search a task (e.g. "how to make pour over coffee") and use Filters → Creative Commons.
