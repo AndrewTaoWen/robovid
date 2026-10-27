@@ -1,14 +1,15 @@
 """Command line entry point.
 
     robovid annotate path/to/video.mp4 --out annotations.jsonl
+    robovid annotate --backend modal data/videos/*.mp4 --out annotations.jsonl
     robovid fetch --urls examples/urls.txt --out-dir data/videos
 """
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
-
-from .frames import chunk_into_clips, sample_frames
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
@@ -24,21 +25,40 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
 
 def cmd_annotate(args: argparse.Namespace) -> None:
-    from .annotate import ClaudeAnnotator
+    if args.backend == "modal":
+        return _annotate_modal(args)
+
+    from .annotate import ClaudeAnnotator, annotate_video
 
     annotator = ClaudeAnnotator(model=args.model)
     out = Path(args.out)
     n = 0
     with out.open("a") as fh:
         for video in args.videos:
-            frames = sample_frames(video, fps=args.fps)
-            for clip in chunk_into_clips(frames, clip_len_s=args.clip_len):
-                ann = annotator.annotate(clip, video_id=Path(video).stem)
+            for ann in annotate_video(video, annotator, fps=args.fps, clip_len_s=args.clip_len):
                 fh.write(ann.model_dump_json() + "\n")
                 n += 1
-                print(f"{Path(video).stem} [{clip.start_s:.0f}-{clip.end_s:.0f}s] "
+                print(f"{ann.video_id} [{ann.clip_start_s:.0f}-{ann.clip_end_s:.0f}s] "
                       f"{ann.task} ({len(ann.steps)} steps)")
     print(f"wrote {n} clip annotations to {out}")
+
+
+def _annotate_modal(args: argparse.Namespace) -> None:
+    if args.max_containers is not None:  # read by modal_app at import time
+        os.environ["ROBOVID_MODAL_MAX_CONTAINERS"] = str(args.max_containers)
+    try:
+        from .modal_app import run_on_modal
+    except ImportError as e:
+        sys.exit(f"--backend modal needs the modal extra: pip install -e '.[modal]' ({e})")
+
+    n, failures = run_on_modal(args.videos, args.out, fps=args.fps,
+                               clip_len_s=args.clip_len, model=args.model)
+    print(f"wrote {n} clip annotations from {len(args.videos) - len(failures)} "
+          f"videos to {args.out}")
+    for job, err in failures:
+        print(f"failed {job.local_path}: {err!r}", file=sys.stderr)
+    if failures:
+        sys.exit(1)
 
 
 def main() -> None:
@@ -57,6 +77,11 @@ def main() -> None:
     a.add_argument("--fps", type=float, default=1.0)
     a.add_argument("--clip-len", type=float, default=16.0)
     a.add_argument("--model", default=None)
+    a.add_argument("--backend", choices=["local", "modal"], default="local",
+                   help="local: annotate here, one video at a time; "
+                        "modal: one Modal container per video, in parallel")
+    a.add_argument("--max-containers", type=int, default=None,
+                   help="modal backend: max parallel containers (default 20)")
     a.set_defaults(func=cmd_annotate)
 
     args = p.parse_args()

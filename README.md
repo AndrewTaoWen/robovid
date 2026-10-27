@@ -48,6 +48,28 @@ robovid annotate data/videos/*.mp4 --out annotations.jsonl
 
 Run tests with `python -m unittest discover tests`.
 
+## Run at scale on Modal
+
+The `modal` backend runs the same per-video pipeline (frame sampling → clips →
+VLM annotation) on [Modal](https://modal.com), one container per video, fanned
+out in parallel. Results are merged back in input order into the same JSONL
+schema as the local backend.
+
+```bash
+pip install -e '.[modal]'        # or: pip install modal
+modal setup                      # authenticate once
+modal secret create anthropic ANTHROPIC_API_KEY=...
+
+robovid annotate --backend modal data/videos/*.mp4 --out annotations.jsonl \
+    --max-containers 20
+```
+
+Local videos are uploaded to a Modal Volume (`robovid-videos`, keyed by content
+hash so re-runs don't collide), each video gets its own container with a 30
+minute timeout and up to 2 retries, and `--max-containers` caps parallelism
+(keep it within your Anthropic rate limits). Videos that still fail are listed
+at the end and the command exits non-zero; successful ones are still written.
+
 ## Data provenance
 
 By default `fetch` skips any video that isn't Creative Commons or public
@@ -59,5 +81,5 @@ platform's terms before collecting at scale.
 - [ ] Hand and object bounding boxes (detector pass alongside the VLM)
 - [ ] Label-quality eval: compare VLM labels against a hand-labeled set, per model
 - [ ] Filter step: drop clips that aren't usable for robotics before paying for full annotation
-- [ ] Parallel processing for large video sets (Spark or Ray)
+- [x] Parallel processing for large video sets (Modal: `--backend modal`)
 - [ ] Export to formats robotics teams use (e.g. LeRobot, RLDS)

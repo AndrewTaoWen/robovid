@@ -9,9 +9,10 @@ import base64
 import json
 import os
 import re
-from typing import Protocol
+from pathlib import Path
+from typing import Iterator, Protocol
 
-from .frames import Clip
+from .frames import Clip, chunk_into_clips, sample_frames
 from .schema import ClipAnnotation
 
 PROMPT = """You are labeling video for robot learning. You will see frames sampled
@@ -34,6 +35,23 @@ class Annotator(Protocol):
     name: str
 
     def annotate(self, clip: Clip, video_id: str) -> ClipAnnotation: ...
+
+
+def annotate_video(
+    video: str | Path,
+    annotator: Annotator,
+    fps: float = 1.0,
+    clip_len_s: float = 16.0,
+    video_id: str | None = None,
+) -> Iterator[ClipAnnotation]:
+    """Sample frames from one video, chunk them into clips and annotate each clip.
+
+    This is the per-video unit of work shared by the local CLI and the Modal backend.
+    """
+    video_id = video_id or Path(video).stem
+    frames = sample_frames(video, fps=fps)
+    for clip in chunk_into_clips(frames, clip_len_s=clip_len_s):
+        yield annotator.annotate(clip, video_id=video_id)
 
 
 def _extract_json(text: str) -> dict:
