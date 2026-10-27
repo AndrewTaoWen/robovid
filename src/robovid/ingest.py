@@ -33,7 +33,7 @@ def license_ok(license_str: str | None) -> bool:
 
 def fetch_meta(url: str) -> VideoMeta:
     out = subprocess.run(
-        ["yt-dlp", "--dump-json", "--no-playlist", url],
+        ["yt-dlp", "--dump-json", "--no-playlist", "--", url],
         check=True, capture_output=True, text=True,
     ).stdout
     info = json.loads(out)
@@ -56,7 +56,7 @@ def download(url: str, out_dir: str | Path, require_open_license: bool = True) -
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"{meta.video_id}.mp4"
     subprocess.run(
-        ["yt-dlp", "-f", "mp4[height<=720]/best[height<=720]", "-o", str(target), url],
+        ["yt-dlp", "-f", "mp4[height<=720]/best[height<=720]", "-o", str(target), "--", url],
         check=True,
     )
     meta.path = target
