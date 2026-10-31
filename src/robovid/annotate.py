@@ -14,6 +14,7 @@ from typing import Iterator, Protocol
 
 from .frames import Clip, chunk_into_clips, sample_frames
 from .schema import ClipAnnotation
+from .verbs import VERBS, normalize_verb
 
 PROMPT = """You are labeling video for robot learning. You will see frames sampled
 from a {duration:.0f}-second clip, each tagged with its timestamp in seconds.
@@ -27,6 +28,9 @@ Return ONLY a JSON object with these fields:
 - steps: list of atomic manipulation steps, each with
   start_s, end_s (absolute seconds, between {start:.1f} and {end:.1f}),
   verb, objects (list), hand ("left"/"right"/"both"/"none"/"unknown"), description
+
+verb must be exactly one of: {verbs}.
+Use "other" only when none fits, and say what happened in the description.
 
 Only label what is visible. If unsure, use "unknown" or leave steps empty."""
 
@@ -43,15 +47,21 @@ def annotate_video(
     fps: float = 1.0,
     clip_len_s: float = 16.0,
     video_id: str | None = None,
+    source_url: str | None = None,
+    license: str | None = None,
 ) -> Iterator[ClipAnnotation]:
     """Sample frames from one video, chunk them into clips and annotate each clip.
 
     This is the per-video unit of work shared by the local CLI and the Modal backend.
+    `source_url` and `license` (normally from the sidecar `fetch` writes) are
+    stamped on every clip so the dataset's provenance stays auditable.
     """
     video_id = video_id or Path(video).stem
     frames = sample_frames(video, fps=fps)
+    provenance = {k: v for k, v in (("source_url", source_url), ("license", license)) if v}
     for clip in chunk_into_clips(frames, clip_len_s=clip_len_s):
-        yield annotator.annotate(clip, video_id=video_id)
+        ann = annotator.annotate(clip, video_id=video_id)
+        yield ann.model_copy(update=provenance) if provenance else ann
 
 
 def _extract_json(text: str) -> dict:
@@ -61,13 +71,35 @@ def _extract_json(text: str) -> dict:
     return json.loads(match.group(0))
 
 
+def _normalize_steps(steps: object) -> object:
+    """Map each step's verb onto the fixed vocabulary, keeping the original."""
+    if not isinstance(steps, list):
+        return steps
+    out = []
+    for step in steps:
+        if isinstance(step, dict) and "verb" in step:
+            raw = step.get("verb")
+            verb = normalize_verb(raw if isinstance(raw, str) else None)
+            step = {**step, "verb": verb}
+            if isinstance(raw, str) and raw.strip().lower() != verb:
+                step["raw_verb"] = raw
+        out.append(step)
+    return out
+
+
 def build_annotation(raw: dict, clip: Clip, video_id: str, model: str) -> ClipAnnotation:
+    fields = {k: v for k, v in raw.items() if k in ClipAnnotation.model_fields}
+    # provenance comes from fetch metadata, never from the model
+    fields.pop("source_url", None)
+    fields.pop("license", None)
+    if "steps" in fields:
+        fields["steps"] = _normalize_steps(fields["steps"])
     return ClipAnnotation(
         video_id=video_id,
         clip_start_s=clip.start_s,
         clip_end_s=clip.end_s,
         model=model,
-        **{k: v for k, v in raw.items() if k in ClipAnnotation.model_fields},
+        **fields,
     )
 
 
@@ -101,7 +133,8 @@ class ClaudeAnnotator:
         content.append({
             "type": "text",
             "text": PROMPT.format(
-                duration=clip.end_s - clip.start_s, start=clip.start_s, end=clip.end_s
+                duration=clip.end_s - clip.start_s, start=clip.start_s, end=clip.end_s,
+                verbs=", ".join(VERBS),
             ),
         })
 

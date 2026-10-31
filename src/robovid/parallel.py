@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from .annotate import Annotator, annotate_video
+from .ingest import read_sidecar
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,8 @@ class VideoJob:
     local_path: str
     remote_path: str  # path relative to the shared volume root
     video_id: str
+    source_url: str | None = None  # from the fetch sidecar, if any
+    license: str | None = None
 
 
 def _sha256(path: str | Path, chunk: int = 1 << 20) -> str:
@@ -37,10 +40,13 @@ def plan_jobs(videos: Sequence[str | Path]) -> list[VideoJob]:
     jobs = []
     for v in videos:
         p = Path(v)
+        meta = read_sidecar(p)
         jobs.append(VideoJob(
             local_path=str(p),
             remote_path=f"{_sha256(p)[:16]}/{p.name}",
             video_id=p.stem,  # same id the local backend uses
+            source_url=meta.get("url"),
+            license=meta.get("license"),
         ))
     return jobs
 
@@ -51,12 +57,14 @@ def annotate_video_to_jsonl(
     annotator: Annotator,
     fps: float = 1.0,
     clip_len_s: float = 16.0,
+    source_url: str | None = None,
+    license: str | None = None,
 ) -> list[str]:
     """Annotate one video and return its JSONL lines (one per clip, no newline)."""
     return [
         ann.model_dump_json()
         for ann in annotate_video(path, annotator, fps=fps, clip_len_s=clip_len_s,
-                                  video_id=video_id)
+                                  video_id=video_id, source_url=source_url, license=license)
     ]
 
 

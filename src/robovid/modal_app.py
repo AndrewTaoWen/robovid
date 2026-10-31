@@ -51,14 +51,21 @@ volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
     cpu=2.0,
 )
 def annotate_one(
-    remote_path: str, video_id: str, fps: float, clip_len_s: float, model: str | None
+    remote_path: str,
+    video_id: str,
+    fps: float,
+    clip_len_s: float,
+    model: str | None,
+    source_url: str | None = None,
+    license: str | None = None,
 ) -> list[str]:
     """Annotate ONE video from the volume; returns its JSONL lines."""
     from robovid.annotate import ClaudeAnnotator
 
     annotator = ClaudeAnnotator(model=model)
     return annotate_video_to_jsonl(
-        f"{VIDEO_DIR}/{remote_path}", video_id, annotator, fps=fps, clip_len_s=clip_len_s
+        f"{VIDEO_DIR}/{remote_path}", video_id, annotator, fps=fps, clip_len_s=clip_len_s,
+        source_url=source_url, license=license,
     )
 
 
@@ -81,11 +88,17 @@ def run_on_modal(
     uses the same JSONL schema as the local backend.
     """
     jobs = plan_jobs(videos)
+    missing = [j.video_id for j in jobs if not j.source_url]
+    if missing:
+        print(f"warning: no provenance sidecar for {len(missing)} video(s) "
+              f"({', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}); "
+              "run `robovid fetch` on their URLs to backfill")
     print(f"uploading {len(jobs)} videos to Modal volume {VOLUME_NAME!r}")
     upload_videos(jobs)
     with modal.enable_output(), app.run():
         results = list(annotate_one.starmap(
-            [(j.remote_path, j.video_id, fps, clip_len_s, model) for j in jobs],
+            [(j.remote_path, j.video_id, fps, clip_len_s, model, j.source_url, j.license)
+             for j in jobs],
             order_outputs=True,
             return_exceptions=True,
         ))

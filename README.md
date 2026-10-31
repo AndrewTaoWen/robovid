@@ -20,6 +20,8 @@ Each line of the output is one clip:
 ```json
 {
   "video_id": "abc123",
+  "source_url": "https://www.youtube.com/watch?v=abc123",
+  "license": "Creative Commons Attribution license (reuse allowed)",
   "clip_start_s": 16.0,
   "clip_end_s": 31.0,
   "task": "making pour-over coffee",
@@ -73,8 +75,19 @@ at the end and the command exits non-zero; successful ones are still written.
 ## Data provenance
 
 By default `fetch` skips any video that isn't Creative Commons or public
-domain, and every annotation can be traced back to its source. Check each
-platform's terms before collecting at scale.
+domain. For each video it keeps, it writes a sidecar (`<video_id>.json`) with
+the source URL, title and license, and `annotate` stamps `source_url` and
+`license` on every clip, so each annotation traces back to its source. Re-run
+`fetch` on videos you already have to backfill missing sidecars without
+downloading them again. Check each platform's terms before collecting at scale.
+
+## Verb vocabulary
+
+Step verbs come from a fixed list (`robovid/verbs.py`: grasp, place, pour,
+turn, insert, remove, ...), so "point to", "point_to" and "point at" don't
+become three different labels. The model is asked to use that list, and any
+verb it returns is mapped onto it afterwards; when the wording changed, the
+original is kept in `raw_verb`. Verbs that fit nothing become `other`.
 
 ## Roadmap
 

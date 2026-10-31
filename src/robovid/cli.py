@@ -29,13 +29,19 @@ def cmd_annotate(args: argparse.Namespace) -> None:
         return _annotate_modal(args)
 
     from .annotate import ClaudeAnnotator, annotate_video
+    from .ingest import read_sidecar
 
     annotator = ClaudeAnnotator(model=args.model)
     out = Path(args.out)
     n = 0
     with out.open("a") as fh:
         for video in args.videos:
-            for ann in annotate_video(video, annotator, fps=args.fps, clip_len_s=args.clip_len):
+            meta = read_sidecar(video)
+            if not meta:
+                print(f"warning: no provenance sidecar for {video}; "
+                      "source_url and license will be empty", file=sys.stderr)
+            for ann in annotate_video(video, annotator, fps=args.fps, clip_len_s=args.clip_len,
+                                      source_url=meta.get("url"), license=meta.get("license")):
                 fh.write(ann.model_dump_json() + "\n")
                 n += 1
                 print(f"{ann.video_id} [{ann.clip_start_s:.0f}-{ann.clip_end_s:.0f}s] "
