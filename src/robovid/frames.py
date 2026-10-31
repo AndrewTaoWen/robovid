@@ -44,6 +44,11 @@ def sample_frames(path: str | Path, fps: float = 1.0, max_side: int = 768) -> li
                 frames.append(Frame(t=idx / native_fps, jpeg=buf.tobytes()))
         idx += 1
     cap.release()
+    if not frames:
+        raise ValueError(
+            f"Decoded 0 frames from {path}; the codec may be unsupported by OpenCV "
+            "(AV1 is a common cause). Re-encode to H.264 or re-fetch the video."
+        )
     return frames
 
 
