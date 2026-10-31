@@ -56,7 +56,16 @@ def download(url: str, out_dir: str | Path, require_open_license: bool = True) -
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"{meta.video_id}.mp4"
     subprocess.run(
-        ["yt-dlp", "-f", "mp4[height<=720]/best[height<=720]", "-o", str(target), "--", url],
+        [
+            "yt-dlp",
+            # Prefer H.264 (avc1): OpenCV's pip wheels can't decode AV1, which
+            # YouTube now serves by default, so AV1 files yield zero frames.
+            "-f",
+            "b[vcodec^=avc1][height<=720]/bv*[vcodec^=avc1][height<=720]+ba"
+            "/mp4[height<=720]/best[height<=720]",
+            "--merge-output-format", "mp4",
+            "-o", str(target), "--", url,
+        ],
         check=True,
     )
     meta.path = target
