@@ -103,8 +103,38 @@ def build_annotation(raw: dict, clip: Clip, video_id: str, model: str) -> ClipAn
     )
 
 
+def clip_parts(clip: Clip, max_frames: int) -> list[tuple[str, str | bytes]]:
+    """Build what we show a model for one clip, before it is put in any one API's format.
+
+    Every model gets the same input this way, so their labels can be compared fairly.
+
+    The result is a list of parts in order. Each frame becomes two parts: a text
+    part with its timestamp (for example "t=12.0s"), then an image part with the
+    frame's JPEG bytes. The labeling instructions come last, as one text part.
+
+    A clip can have more frames than a model should see. In that case we keep
+    `max_frames` of them, spread evenly from the start of the clip to the end.
+    """
+    frames = clip.frames
+    if len(frames) > max_frames:
+        stride = len(frames) / max_frames
+        frames = [frames[int(i * stride)] for i in range(max_frames)]
+    parts: list[tuple[str, str | bytes]] = []
+    for f in frames:
+        parts.append(("text", f"t={f.t:.1f}s"))
+        parts.append(("image", f.jpeg))
+    parts.append(("text", PROMPT.format(
+        duration=clip.end_s - clip.start_s, start=clip.start_s, end=clip.end_s,
+        verbs=", ".join(VERBS),
+    )))
+    return parts
+
+
 class ClaudeAnnotator:
-    """Annotator backed by the Anthropic API (needs ANTHROPIC_API_KEY)."""
+    """Labels clips with Claude, through the Anthropic API.
+
+    It needs an API key in the ANTHROPIC_API_KEY environment variable.
+    """
 
     def __init__(self, model: str | None = None, max_frames: int = 16):
         import anthropic  # imported lazily so the rest of the package works without it
@@ -114,29 +144,20 @@ class ClaudeAnnotator:
         self.max_frames = max_frames
 
     def annotate(self, clip: Clip, video_id: str) -> ClipAnnotation:
-        frames = clip.frames
-        if len(frames) > self.max_frames:  # evenly subsample long clips
-            stride = len(frames) / self.max_frames
-            frames = [frames[int(i * stride)] for i in range(self.max_frames)]
-
+        # Put the shared parts into the Anthropic message format.
         content: list[dict] = []
-        for f in frames:
-            content.append({"type": "text", "text": f"t={f.t:.1f}s"})
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": base64.b64encode(f.jpeg).decode(),
-                },
-            })
-        content.append({
-            "type": "text",
-            "text": PROMPT.format(
-                duration=clip.end_s - clip.start_s, start=clip.start_s, end=clip.end_s,
-                verbs=", ".join(VERBS),
-            ),
-        })
+        for kind, value in clip_parts(clip, self.max_frames):
+            if kind == "text":
+                content.append({"type": "text", "text": value})
+            else:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": base64.b64encode(value).decode(),
+                    },
+                })
 
         resp = self.client.messages.create(
             model=self.name,
