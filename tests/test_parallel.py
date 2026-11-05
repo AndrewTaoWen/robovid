@@ -122,7 +122,7 @@ class TestMerge(unittest.TestCase):
 class TestCliModalBackend(unittest.TestCase):
     def args(self, **kw):
         base = dict(videos=["a.mp4", "b.mp4"], out="o.jsonl", fps=1.0, clip_len=16.0,
-                    model=None, backend="modal", max_containers=7)
+                    model=None, backend="modal", max_containers=7, model_provider="claude")
         base.update(kw)
         return argparse.Namespace(**base)
 
@@ -136,7 +136,8 @@ class TestCliModalBackend(unittest.TestCase):
             cli.cmd_annotate(self.args())
             self.assertEqual(env["ROBOVID_MODAL_MAX_CONTAINERS"], "7")
         fake.run_on_modal.assert_called_once_with(
-            ["a.mp4", "b.mp4"], "o.jsonl", fps=1.0, clip_len_s=16.0, model=None)
+            ["a.mp4", "b.mp4"], "o.jsonl", fps=1.0, clip_len_s=16.0, model=None,
+            model_provider="claude")
 
     def test_exits_nonzero_on_failed_videos(self):
         from robovid import cli
