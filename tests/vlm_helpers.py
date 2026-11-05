@@ -30,3 +30,54 @@ def model_reply(**over):
     }
     body.update(over)
     return "```json\n" + json.dumps(body) + "\n```"
+
+
+def fake_modal():
+    """A stand-in for the `modal` package, with just enough for our code to import.
+
+    Its decorators hand back the plain function or class, so tests can call the
+    code directly. The rest (Volume, Secret, Cls, ...) are mocks we can inspect.
+    """
+    import types
+    from unittest import mock
+
+    m = types.ModuleType("modal")
+
+    class _Image:
+        def __getattr__(self, name):  # lets .pip_install(...).env(...) chain
+            return lambda *a, **k: self
+
+    class App:
+        def __init__(self, name, **kw):
+            self.name = name
+
+        def function(self, **kw):
+            return lambda f: f
+
+        def cls(self, **kw):
+            return lambda c: c
+
+        def local_entrypoint(self, **kw):
+            return lambda f: f
+
+    m.App = App
+    m.Image = types.SimpleNamespace(debian_slim=lambda *a, **k: _Image())
+    m.Volume, m.Secret, m.Retries, m.Cls = mock.Mock(), mock.Mock(), mock.Mock(), mock.Mock()
+    m.enter = m.method = lambda *a, **k: (lambda f: f)
+    m.batched = lambda *a, **k: (lambda f: f)
+    return m
+
+
+def import_with_fake_modal(module, env=None):
+    """Import `module` from scratch with the stand-in Modal; returns (module, stand-in)."""
+    import importlib
+    import os
+    import sys
+    from unittest import mock
+
+    stub = fake_modal()
+    with mock.patch.dict(sys.modules, {"modal": stub}), \
+            mock.patch.dict(os.environ, env or {}):
+        sys.modules.pop(module, None)
+        mod = importlib.import_module(module)
+    return mod, stub
