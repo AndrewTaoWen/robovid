@@ -72,6 +72,50 @@ minute timeout and up to 2 retries, and `--max-containers` caps parallelism
 (keep it within your Anthropic rate limits). Videos that still fail are listed
 at the end and the command exits non-zero; successful ones are still written.
 
+## Run with an open model on Modal GPUs
+
+Instead of calling Anthropic's API, the Modal backend can label clips with an
+open vision-language model (default `Qwen/Qwen2.5-VL-7B-Instruct`) served with
+[vLLM](https://docs.vllm.ai) on Modal GPUs (`robovid/modal_vlm.py`). The CPU
+containers still decode the videos. For each clip they send its frames to the
+GPU service, which collects requests from all videos with `@modal.batched` and
+runs each batch in a single vLLM call. The service uses the same prompt, frame
+limit (16 per clip), JSON parsing and verb normalization as the Claude path, so
+the labels can be compared directly, and `model` records the open model's name.
+No Anthropic key is needed.
+
+```bash
+pip install -e '.[modal]'   # vLLM is only installed inside the GPU image
+modal setup
+
+modal deploy -m robovid.modal_vlm        # once, and again after changing its config
+modal run -m robovid.modal_vlm           # optional: label one synthetic clip
+
+robovid annotate --backend modal --model-provider vllm data/videos/*.mp4 \
+    --out annotations-qwen.jsonl --max-containers 20
+```
+
+- **GPU:** one L40S (48 GB) per container by default. The 7B model in bf16 fits
+  with room left for the KV cache.
+- **Cold start:** the first start downloads about 16 GB of weights into the
+  `robovid-hf-cache` Volume. After that, a cold start only loads the weights from
+  the Volume and initializes vLLM, which should take a few minutes (not yet
+  measured). The service stays warm for 5 minutes after its last request and then
+  scales to zero.
+- **Settings:** set these env vars when you run `modal deploy`.
+  `ROBOVID_VLLM_MODEL` sets the Hugging Face id of any vLLM-supported VLM,
+  `ROBOVID_VLLM_GPU` the GPU type (e.g. `A100-80GB`, `H100`),
+  `ROBOVID_VLLM_MAX_CONTAINERS` the number of GPU containers (default 2),
+  `ROBOVID_VLLM_MAX_BATCH` the clips per batch (default 16), and
+  `ROBOVID_VLLM_MAX_IMAGES` / `ROBOVID_VLLM_MAX_MODEL_LEN` the frames per clip and
+  the context length. The vLLM version is pinned in `modal_vlm.py`.
+- `--model-provider vllm` also works with the local backend: frames are decoded
+  on your machine and sent to the deployed service.
+
+A recommended next step is to label the same clips with both providers and
+compare the results (task agreement, step count, verb distribution, how often
+the output isn't valid JSON).
+
 ## Data provenance
 
 By default `fetch` skips any video that isn't Creative Commons or public

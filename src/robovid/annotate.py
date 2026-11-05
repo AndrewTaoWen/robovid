@@ -10,7 +10,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Iterator, Protocol
+from typing import Callable, Iterator, Protocol
 
 from .frames import Clip, chunk_into_clips, sample_frames
 from .schema import ClipAnnotation
@@ -103,6 +103,29 @@ def build_annotation(raw: dict, clip: Clip, video_id: str, model: str) -> ClipAn
     )
 
 
+def clip_parts(clip: Clip, max_frames: int) -> list[tuple[str, str | bytes]]:
+    """Provider-neutral request content for one clip, shared by every annotator.
+
+    Returns ("text", str) and ("image", jpeg_bytes) parts in order: each sampled
+    frame's timestamp then the frame (evenly subsampled to at most `max_frames`),
+    then the labeling prompt. Each provider only maps these onto its wire format,
+    so Claude and open-model labels come from the same input.
+    """
+    frames = clip.frames
+    if len(frames) > max_frames:  # evenly subsample long clips
+        stride = len(frames) / max_frames
+        frames = [frames[int(i * stride)] for i in range(max_frames)]
+    parts: list[tuple[str, str | bytes]] = []
+    for f in frames:
+        parts.append(("text", f"t={f.t:.1f}s"))
+        parts.append(("image", f.jpeg))
+    parts.append(("text", PROMPT.format(
+        duration=clip.end_s - clip.start_s, start=clip.start_s, end=clip.end_s,
+        verbs=", ".join(VERBS),
+    )))
+    return parts
+
+
 class ClaudeAnnotator:
     """Annotator backed by the Anthropic API (needs ANTHROPIC_API_KEY)."""
 
@@ -114,29 +137,19 @@ class ClaudeAnnotator:
         self.max_frames = max_frames
 
     def annotate(self, clip: Clip, video_id: str) -> ClipAnnotation:
-        frames = clip.frames
-        if len(frames) > self.max_frames:  # evenly subsample long clips
-            stride = len(frames) / self.max_frames
-            frames = [frames[int(i * stride)] for i in range(self.max_frames)]
-
         content: list[dict] = []
-        for f in frames:
-            content.append({"type": "text", "text": f"t={f.t:.1f}s"})
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": base64.b64encode(f.jpeg).decode(),
-                },
-            })
-        content.append({
-            "type": "text",
-            "text": PROMPT.format(
-                duration=clip.end_s - clip.start_s, start=clip.start_s, end=clip.end_s,
-                verbs=", ".join(VERBS),
-            ),
-        })
+        for kind, value in clip_parts(clip, self.max_frames):
+            if kind == "text":
+                content.append({"type": "text", "text": value})
+            else:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": base64.b64encode(value).decode(),
+                    },
+                })
 
         resp = self.client.messages.create(
             model=self.name,
@@ -145,3 +158,61 @@ class ClaudeAnnotator:
         )
         text = "".join(b.text for b in resp.content if b.type == "text")
         return build_annotation(_extract_json(text), clip, video_id, self.name)
+
+
+# Where the GPU service from robovid.modal_vlm is deployed. Kept here (not imported
+# from modal_vlm) so this module never needs Modal; a test checks the two agree.
+VLLM_APP_NAME = "robovid-vlm"
+VLLM_CLS_NAME = "VLMServer"
+
+
+def chat_messages(clip: Clip, max_frames: int) -> list[dict]:
+    """The clip as one OpenAI-style chat turn, the format vLLM's `LLM.chat` takes.
+
+    Frames are sent inline as base64 JPEG data URLs, interleaved with their
+    timestamps, exactly like the Claude request.
+    """
+    content: list[dict] = []
+    for kind, value in clip_parts(clip, max_frames):
+        if kind == "text":
+            content.append({"type": "text", "text": value})
+        else:
+            url = "data:image/jpeg;base64," + base64.b64encode(value).decode()
+            content.append({"type": "image_url", "image_url": {"url": url}})
+    return [{"role": "user", "content": content}]
+
+
+class VLLMAnnotator:
+    """Annotator backed by an open VLM served with vLLM on Modal GPUs.
+
+    `generate` takes one request dict ({"messages": [...]}) and returns
+    {"model": str, "text": str} or {"model": str, "error": str}. In practice it is
+    the deployed `VLMServer.generate.remote` (see `from_modal`); tests pass a fake.
+    The model's reply goes through the same JSON extraction, verb normalization
+    and schema validation as the Claude path, so the two are comparable.
+    """
+
+    def __init__(self, generate: Callable[[dict], dict], max_frames: int = 16,
+                 name: str = "vllm"):
+        self._generate = generate
+        self.max_frames = max_frames
+        self.name = name  # replaced by the served model's name after the first reply
+
+    @classmethod
+    def from_modal(cls, app_name: str = VLLM_APP_NAME, cls_name: str = VLLM_CLS_NAME,
+                   max_frames: int = 16) -> "VLLMAnnotator":
+        import modal  # lazily, so `import robovid` never needs Modal
+
+        server = modal.Cls.from_name(app_name, cls_name)()
+        return cls(server.generate.remote, max_frames=max_frames)
+
+    def build_request(self, clip: Clip) -> dict:
+        return {"messages": chat_messages(clip, self.max_frames)}
+
+    def annotate(self, clip: Clip, video_id: str) -> ClipAnnotation:
+        resp = self._generate(self.build_request(clip))
+        self.name = resp.get("model") or self.name
+        if resp.get("error") or resp.get("text") is None:
+            raise RuntimeError(f"vLLM request failed for {video_id} "
+                               f"[{clip.start_s:.0f}s]: {resp.get('error')}")
+        return build_annotation(_extract_json(resp["text"]), clip, video_id, self.name)
