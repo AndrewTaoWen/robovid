@@ -11,7 +11,10 @@ class Step(BaseModel):
 
     start_s: float = Field(ge=0, description="Start time in seconds")
     end_s: float = Field(ge=0, description="End time in seconds")
-    verb: str = Field(description="Action verb: grasp, pour, place, open, wipe...")
+    verb: str = Field(description="Action verb from robovid.verbs.VERBS: grasp, pour, place...")
+    raw_verb: str | None = Field(
+        default=None, description="The model's original verb, when it was normalized"
+    )
     objects: list[str] = Field(default_factory=list, description="Objects acted on")
     hand: Literal["left", "right", "both", "none", "unknown"] = "unknown"
     description: str = ""

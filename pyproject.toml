@@ -12,6 +12,9 @@ dependencies = [
     "yt-dlp",
 ]
 
+[project.optional-dependencies]
+modal = ["modal>=1.0"]
+
 [project.scripts]
 robovid = "robovid.cli:main"
 
