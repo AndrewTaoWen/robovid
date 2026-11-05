@@ -10,7 +10,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Iterator, Protocol
+from typing import Callable, Iterator, Protocol
 
 from .frames import Clip, chunk_into_clips, sample_frames
 from .schema import ClipAnnotation
@@ -166,3 +166,69 @@ class ClaudeAnnotator:
         )
         text = "".join(b.text for b in resp.content if b.type == "text")
         return build_annotation(_extract_json(text), clip, video_id, self.name)
+
+
+# Where the open-model GPU service is deployed on Modal (see modal_vlm.py).
+# The names are written out here instead of imported, so this file never needs
+# Modal installed. A test checks that both files use the same names.
+VLLM_APP_NAME = "robovid-vlm"
+VLLM_CLS_NAME = "VLMServer"
+
+
+def chat_messages(clip: Clip, max_frames: int) -> list[dict]:
+    """Put a clip into the chat format that vLLM accepts.
+
+    vLLM is the open-source software that runs the open model. It takes the same
+    message format as OpenAI's chat API. Each frame is sent inside the message as
+    a data URL (the JPEG bytes written out as text), right after its timestamp,
+    in the same order Claude sees them.
+    """
+    content: list[dict] = []
+    for kind, value in clip_parts(clip, max_frames):
+        if kind == "text":
+            content.append({"type": "text", "text": value})
+        else:
+            url = "data:image/jpeg;base64," + base64.b64encode(value).decode()
+            content.append({"type": "image_url", "image_url": {"url": url}})
+    return [{"role": "user", "content": content}]
+
+
+class VLLMAnnotator:
+    """Labels clips with an open vision model that runs on our own Modal GPUs.
+
+    `generate` is the function that reaches the model. It takes one request
+    (`{"messages": [...]}`) and returns either `{"model": name, "text": reply}` or
+    `{"model": name, "error": message}`. In real runs it is the deployed GPU
+    service (see `from_modal`). Tests pass a stand-in.
+
+    The model's reply goes through the same checks as Claude's: we pull out the
+    JSON, map verbs onto the fixed list, and validate the fields. So labels from
+    the two models can be compared side by side.
+    """
+
+    def __init__(self, generate: Callable[[dict], dict], max_frames: int = 16,
+                 name: str = "vllm"):
+        self._generate = generate
+        self.max_frames = max_frames
+        # Replaced by the real model name from the first reply.
+        self.name = name
+
+    @classmethod
+    def from_modal(cls, app_name: str = VLLM_APP_NAME, cls_name: str = VLLM_CLS_NAME,
+                   max_frames: int = 16) -> "VLLMAnnotator":
+        """Connect to the GPU service that is already deployed on Modal."""
+        import modal  # imported here, so the rest of robovid works without Modal
+
+        server = modal.Cls.from_name(app_name, cls_name)()
+        return cls(server.generate.remote, max_frames=max_frames)
+
+    def build_request(self, clip: Clip) -> dict:
+        return {"messages": chat_messages(clip, self.max_frames)}
+
+    def annotate(self, clip: Clip, video_id: str) -> ClipAnnotation:
+        resp = self._generate(self.build_request(clip))
+        self.name = resp.get("model") or self.name
+        if resp.get("error") or resp.get("text") is None:
+            raise RuntimeError(f"the open model could not label {video_id} at "
+                               f"{clip.start_s:.0f}s: {resp.get('error')}")
+        return build_annotation(_extract_json(resp["text"]), clip, video_id, self.name)
