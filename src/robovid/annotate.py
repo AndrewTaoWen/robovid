@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Callable, Iterator, Protocol
 
@@ -25,7 +26,7 @@ Return ONLY a JSON object with these fields:
 - has_human_hands: true/false
 - usable_for_robotics: true only if a person is clearly manipulating objects
   with hands visible (not a talking head, slideshow, or montage)
-- steps: list of atomic manipulation steps, each with
+- steps: list of at most {max_steps} atomic manipulation steps, each with
   start_s, end_s (absolute seconds, between {start:.1f} and {end:.1f}),
   verb, objects (list), hand ("left"/"right"/"both"/"none"/"unknown"), description
 
@@ -33,6 +34,45 @@ verb must be exactly one of: {verbs}.
 Use "other" only when none fits, and say what happened in the description.
 
 Only label what is visible. If unsure, use "unknown" or leave steps empty."""
+
+# Most steps we ask for per clip. A 16-second clip rarely has more real actions
+# than this, and a hard limit stops a model from repeating itself until its
+# answer is cut off.
+MAX_STEPS = 12
+
+
+def label_schema() -> dict:
+    """The shape a model's answer must have, as a JSON Schema.
+
+    The open model's service uses this to force its output to be valid JSON of
+    exactly this shape (see modal_vlm.py). It mirrors the instructions in PROMPT:
+    the same fields, the fixed verb list, and at most MAX_STEPS steps.
+    """
+    step = {
+        "type": "object",
+        "properties": {
+            "start_s": {"type": "number"},
+            "end_s": {"type": "number"},
+            "verb": {"type": "string", "enum": list(VERBS)},
+            "objects": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+            "hand": {"type": "string",
+                     "enum": ["left", "right", "both", "none", "unknown"]},
+            "description": {"type": "string"},
+        },
+        "required": ["start_s", "end_s", "verb", "objects", "hand", "description"],
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "task": {"type": "string"},
+            "viewpoint": {"type": "string",
+                          "enum": ["egocentric", "third_person", "mixed", "unknown"]},
+            "has_human_hands": {"type": "boolean"},
+            "usable_for_robotics": {"type": "boolean"},
+            "steps": {"type": "array", "items": step, "maxItems": MAX_STEPS},
+        },
+        "required": ["task", "viewpoint", "has_human_hands", "usable_for_robotics", "steps"],
+    }
 
 
 class Annotator(Protocol):
@@ -60,7 +100,16 @@ def annotate_video(
     frames = sample_frames(video, fps=fps)
     provenance = {k: v for k, v in (("source_url", source_url), ("license", license)) if v}
     for clip in chunk_into_clips(frames, clip_len_s=clip_len_s):
-        ann = annotator.annotate(clip, video_id=video_id)
+        try:
+            ann = annotator.annotate(clip, video_id=video_id)
+        except ValueError as e:
+            # The model answered, but not with usable labels (broken or cut-off
+            # JSON, or fields that fail the checks). Skip just this clip, so one
+            # bad answer doesn't throw away the rest of the video. Errors that
+            # aren't about the answer (no API key, service down) still stop the run.
+            print(f"skipped {video_id} at {clip.start_s:.0f}s: the model's answer "
+                  f"wasn't valid labels ({str(e)[:120]})", file=sys.stderr)
+            continue
         yield ann.model_copy(update=provenance) if provenance else ann
 
 
@@ -125,7 +174,7 @@ def clip_parts(clip: Clip, max_frames: int) -> list[tuple[str, str | bytes]]:
         parts.append(("image", f.jpeg))
     parts.append(("text", PROMPT.format(
         duration=clip.end_s - clip.start_s, start=clip.start_s, end=clip.end_s,
-        verbs=", ".join(VERBS),
+        verbs=", ".join(VERBS), max_steps=MAX_STEPS,
     )))
     return parts
 

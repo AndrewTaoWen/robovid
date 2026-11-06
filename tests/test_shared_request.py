@@ -7,14 +7,14 @@ import unittest
 from unittest import mock
 
 from robovid import annotate
-from robovid.annotate import PROMPT, clip_parts
+from robovid.annotate import MAX_STEPS, PROMPT, clip_parts
 from robovid.verbs import VERBS
 from vlm_helpers import make_clip, model_reply
 
 
 def expected_prompt(clip):
     return PROMPT.format(duration=clip.end_s - clip.start_s, start=clip.start_s,
-                         end=clip.end_s, verbs=", ".join(VERBS))
+                         end=clip.end_s, verbs=", ".join(VERBS), max_steps=MAX_STEPS)
 
 
 class TestClipParts(unittest.TestCase):

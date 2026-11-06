@@ -105,6 +105,9 @@ instead. Nothing is sent to an outside API.
   only pay while it's working.
 - **Not tested on a real GPU yet.** The code is covered by tests that use
   stand-ins for Modal and vLLM. Run the one-clip check below before a big batch.
+- **Bad answers are skipped, not fatal.** The open model is forced to answer in the
+  label format, with at most 12 steps per clip. If an answer still can't be read,
+  only that clip is skipped (it's listed in the run's log), not the whole video.
 - **Label quality is unknown.** Open models often give rougher labels than
   Claude. Compare the two on the same clips before relying on it.
 
