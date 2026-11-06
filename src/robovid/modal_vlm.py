@@ -33,6 +33,8 @@ Settings, read when you deploy and copied into the GPU container:
     ROBOVID_VLLM_MAX_BATCH       most clips per pass (default 16)
     ROBOVID_VLLM_MAX_IMAGES      most frames per clip (default 16, same as the labeler)
     ROBOVID_VLLM_MAX_MODEL_LEN   most tokens (pieces of text and image) per request (default 16384)
+    ROBOVID_VLLM_MEMORY_MB       regular memory (RAM) for the GPU container, in MB (default 32768)
+    ROBOVID_VLLM_CPU             CPU cores for the GPU container (default 4)
 
 vLLM is only imported inside the GPU container, so you never need it installed
 on your own machine.
@@ -52,6 +54,12 @@ MAX_CONTAINERS = int(os.environ.get("ROBOVID_VLLM_MAX_CONTAINERS", "2"))
 MAX_BATCH = int(os.environ.get("ROBOVID_VLLM_MAX_BATCH", "16"))
 MAX_IMAGES = int(os.environ.get("ROBOVID_VLLM_MAX_IMAGES", "16"))
 MAX_MODEL_LEN = int(os.environ.get("ROBOVID_VLLM_MAX_MODEL_LEN", "16384"))
+# Regular memory and CPUs for the GPU container. Without these, Modal gives a
+# container only a small default, and vLLM's engine was killed as soon as it
+# started preparing the first clip's images. 32 GB leaves room for the model
+# loading step and for decoding 16 clips' worth of frames at once.
+MEMORY_MB = int(os.environ.get("ROBOVID_VLLM_MEMORY_MB", "32768"))
+CPU = float(os.environ.get("ROBOVID_VLLM_CPU", "4"))
 MAX_TOKENS = 2000  # longest answer allowed, the same limit Claude gets
 VLLM_VERSION = "0.10.1.1"  # pinned so the setup doesn't change under us
 
@@ -70,6 +78,8 @@ image = (
         "ROBOVID_VLLM_MAX_BATCH": str(MAX_BATCH),
         "ROBOVID_VLLM_MAX_IMAGES": str(MAX_IMAGES),
         "ROBOVID_VLLM_MAX_MODEL_LEN": str(MAX_MODEL_LEN),
+        "ROBOVID_VLLM_MEMORY_MB": str(MEMORY_MB),
+        "ROBOVID_VLLM_CPU": str(CPU),
     })
     .add_local_python_source("robovid")  # ship our code so the container can import it
 )
@@ -110,6 +120,8 @@ def _error_text() -> str:
 
 @app.cls(
     gpu=GPU,
+    memory=MEMORY_MB,          # regular memory (RAM), in MB
+    cpu=CPU,                   # for preparing images while the GPU works
     volumes={HF_CACHE: hf_cache, VLLM_CACHE: vllm_cache},
     timeout=20 * 60,           # per group of clips, including loading the model on a fresh start
     scaledown_window=5 * 60,   # stay on for 5 idle minutes, then shut down

@@ -23,6 +23,11 @@ class TestGpuService(unittest.TestCase):
         self.assertEqual(self.vlm.MODEL_NAME, QWEN)
         self.assertEqual(self.vlm.MAX_IMAGES, 16)  # same as the labeler's frame limit
 
+    def test_container_asks_for_enough_memory_and_cpu(self):
+        # Modal's small defaults got vLLM's engine killed on the first clip.
+        self.assertGreaterEqual(self.vlm.MEMORY_MB, 32768)
+        self.assertGreaterEqual(self.vlm.CPU, 4)
+
     def test_a_group_of_clips_is_one_model_call(self):
         llm = mock.Mock()
         llm.chat.return_value = outputs("a", "b")

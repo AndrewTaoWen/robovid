@@ -134,6 +134,8 @@ machine decodes the videos and sends the clips to the GPU service.
 | `ROBOVID_VLLM_MAX_BATCH` | Most clips labeled in one pass | 16 |
 | `ROBOVID_VLLM_MAX_IMAGES` | Most frames per clip | 16 |
 | `ROBOVID_VLLM_MAX_MODEL_LEN` | Most tokens (pieces of text and image) per request | 16384 |
+| `ROBOVID_VLLM_MEMORY_MB` | Regular memory (RAM) for each GPU container, in MB | 32768 |
+| `ROBOVID_VLLM_CPU` | CPU cores for each GPU container | 4 |
 
 ## Data provenance
 
