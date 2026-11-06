@@ -118,6 +118,31 @@ def _error_text() -> str:
     return traceback.format_exc(limit=3)
 
 
+def make_sampling_params(sampling_params_cls):
+    """How the model writes its answer.
+
+    - temperature 0: always the same answer for the same clip.
+    - Forced JSON: vLLM only lets the model write text that fits the label shape
+      (robovid.annotate.label_schema): valid JSON, the fixed verb list, and at
+      most 12 steps. Before this, the model sometimes kept listing steps until it
+      hit the length limit, and the cut-off JSON couldn't be read.
+    - If this vLLM version can't force JSON, it still runs without it, and the
+      answer is checked afterwards as before.
+    """
+    from robovid.annotate import label_schema
+
+    try:
+        from vllm.sampling_params import GuidedDecodingParams
+    except ImportError:
+        print("warning: this vLLM can't force JSON output; answers are only checked afterwards")
+        return sampling_params_cls(temperature=0.0, max_tokens=MAX_TOKENS)
+    return sampling_params_cls(
+        temperature=0.0,
+        max_tokens=MAX_TOKENS,
+        guided_decoding=GuidedDecodingParams(json=label_schema()),
+    )
+
+
 @app.cls(
     gpu=GPU,
     memory=MEMORY_MB,          # regular memory (RAM), in MB
@@ -140,7 +165,7 @@ class VLMServer:
             limit_mm_per_prompt={"image": MAX_IMAGES},
             gpu_memory_utilization=0.90,
         )
-        self.sampling_params = SamplingParams(temperature=0.0, max_tokens=MAX_TOKENS)
+        self.sampling_params = make_sampling_params(SamplingParams)
         hf_cache.commit()
 
     @modal.batched(max_batch_size=MAX_BATCH, wait_ms=500)
